@@ -1,0 +1,50 @@
+name: Build and Push to GCR for Release
+on:
+  release:
+    types:
+      - created
+      - published
+  push:
+    tags-ignore:
+      - sdk*
+jobs:
+  build-and-push-api-to-gcr:
+    runs-on: ubuntu-latest
+    env:
+      PROJECT_ID: ${{ secrets.GCLOUD_PROJECT_ID }}
+      API_NAME: {{app_name}}
+      GCLOUD_SECRET: ${{ secrets.GCLOUD_SERVICE_KEY }}
+    steps:
+      - name: Gitconfig
+        run: |
+          git config --global url."git@github.com:argosapitech".insteadOf "https://github.com/argosapitech"
+      - name: Install SSH key
+        uses: shimataro/ssh-key-action@v2
+        with:
+          key: ${{ secrets.GH_SECRET_ACCESS_KEY }}
+          name: id_rsa
+          known_hosts: ${{ secrets.GLOBAL_KNOWN_HOSTS }}
+          if_key_exists: replace
+      - name: Configure gcloud CLI
+        uses: google-github-actions/setup-gcloud@v0
+        with:
+          service_account_key: ${{ env.GCLOUD_SECRET }}
+          project_id: ${{ env.PROJECT_ID }}
+          export_default_credentials: true
+      - name: Configure Docker Auth
+        run: |-
+          gcloud auth configure-docker -q
+      - name: Checkout
+        uses: actions/checkout@v2
+      - name: Release Tag
+        id: tags
+        run: |-
+          echo ::set-output name=tag::${GITHUB_REF/refs\/tags\//}
+      - name: Build Api Image
+        run: |-
+          docker build -t gcr.io/${{ env.PROJECT_ID }}/${{ env.API_NAME }}:${{ steps.tags.outputs.tag }} \
+          --build-arg ssh_prv_key="$(cat ~/.ssh/id_rsa)" --build-arg ssh_pub_key="$(cat ~/.ssh/id_rsa.pub)" \
+          --build-arg tag="${{ steps.tags.outputs.tag }}" --build-arg app_to_build="./cmd/api/main.go" --build-arg migration_to_build="./migrations/..." -f deployments/common/Dockerfile .
+      - name: Push Api Image
+        run: |-
+          docker push gcr.io/${{ env.PROJECT_ID }}/${{ env.API_NAME }}:${{ steps.tags.outputs.tag }}
